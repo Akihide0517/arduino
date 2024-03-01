@@ -1,0 +1,132 @@
+#include <M5Unified.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Avatar.h>
+#include <IOXhop_FirebaseESP32.h>
+#include "ArduinoJson.h"
+#define BTN_GPIO 41
+#define FIREBASE_DB_URL "https://m5stack-6204a-default-rtdb.firebaseio.com/"
+
+m5avatar::Avatar avatar;
+
+const char* ssid = "aterm-262957-g";
+const char* password = "4184125c5c408";
+const char* openaiApiKey = "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";
+const char* prompt = "Pless speak joke story (Do not use line breaks as character codes and Please answer in Japanese.)";
+
+bool waitMode = false;
+
+void setup() {
+  M5.begin();
+  connectToWiFi();
+  Firebase.begin(FIREBASE_DB_URL);
+
+  M5.Display.setRotation(2);
+  setupAvatar();
+  avatar.setSpeechText("btnで回答言うよ");
+}
+
+void loop() {
+  M5.update();
+  if (digitalRead(BTN_GPIO) == LOW && !waitMode) {
+    waitMode = true;
+    avatar.setExpression(m5avatar::Expression::Neutral);
+    avatar.setSpeechText("考え中...");
+    getRequest();
+    sendOpenAIRequest();
+  }
+}
+
+void setupAvatar()
+{
+  //avatar.setScale(0.45);
+  //avatar.setPosition(-56, -96);
+  avatar.init();
+}
+
+void connectToWiFi() {
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi!");
+}
+
+void getRequest(){
+  String DataPath = "/stackchan/request";
+  String latestValue = Firebase.getString(DataPath);
+  Serial.println(latestValue);
+  String text = latestValue + " (Do not use line breaks as character codes and Please answer in Japanese.)";
+  prompt = convertToCharArray(text);
+}
+
+void sendOpenAIRequest() {
+  HTTPClient http;
+  http.begin("https://api.openai.com/v1/chat/completions");
+  http.addHeader("Authorization", String("Bearer ") + openaiApiKey);
+  http.addHeader("Content-Type", "application/json");
+
+  // Modify the request data to include the user's input
+  String user_input = prompt;
+  String data = "{\"model\": \"gpt-3.5-turbo\", \"messages\": [{\"role\": \"user\", \"content\": \"" + user_input + "\"}]}";
+
+  int httpResponseCode = http.POST(data);
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+
+    // Extract and display the 'content' field from the response
+    char* content = convertToCharArray(extractContentFromResponse(response));
+    splitAndPrint(content);
+    Serial.println(content);
+    delay(5000);
+  } else {
+    avatar.setExpression(m5avatar::Expression::Sleepy);
+    avatar.setSpeechText("Error");
+    Serial.println("Error on HTTP request");
+    delay(1000);
+  }
+  
+  waitMode = false;
+  avatar.setSpeechText("");
+  http.end();
+}
+
+/* 'String' to 'char*' 変換関数 */
+char* convertToCharArray(String str) {
+  /* 'String' to 'char*' 変換 */
+  char* charArray = (char*)malloc((str.length() + 1) * sizeof(char));
+  str.toCharArray(charArray, str.length() + 1);
+  return charArray;
+}
+
+/* ８つずつに区切って表示する関数 */
+void splitAndPrint(const char* charArray) {
+  const int chunkSize = 6*4;
+  int length = strlen(charArray);
+
+  /* 文字列を８つずつに区切って表示 */
+  for (int i = 0; i < length; i += chunkSize) {
+    /* 8文字ずつの部分を取得 */
+    char chunk[chunkSize + 2];
+    strncpy(chunk, charArray + i, chunkSize);
+    chunk[chunkSize] = '\0';  // ヌル文字で終わるようにする
+
+    avatar.setMouthOpenRatio(random(1, 10)*0.1);
+    avatar.setSpeechText(chunk);
+    delay(1500);
+    avatar.setMouthOpenRatio(0);
+    delay(500);
+  }
+}
+
+// Function to extract 'content' from OpenAI response
+String extractContentFromResponse(String response) {
+  // Parse the JSON response to extract 'content' field
+  // You may want to use a JSON parsing library for more robust handling
+  // For simplicity, this example uses basic string manipulation
+  int startIndex = response.indexOf("\"content\": \"") + 12;
+  int endIndex = response.indexOf("\"", startIndex);
+  return response.substring(startIndex, endIndex);
+}
